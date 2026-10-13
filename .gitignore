@@ -1,0 +1,11 @@
+**/bin/
+**/obj/
+.vs/
+.idea/
+TestResults/
+*.user
+data/
+appsettings.Local.json
+.dotnet/
+.nuget/
+publish/
