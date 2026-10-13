@@ -72,6 +72,26 @@ public sealed class ImportTests
     }
 
     [Theory]
+    [InlineData(false, 1)]
+    [InlineData(true, 3)]
+    public async Task SearchesSubfoldersOnlyWhenRecursiveIsEnabled(bool recursive, int expectedFiles)
+    {
+        using var fixture = new DbfFixture();
+        var source = fixture.Write("root.dbf");
+        var nested = Path.Combine(fixture.Folder, "nested");
+        var deep = Path.Combine(nested, "deep");
+        Directory.CreateDirectory(deep);
+        File.Copy(source, Path.Combine(nested, "child.DBF"));
+        File.Copy(source, Path.Combine(deep, "grandchild.dbf"));
+        File.WriteAllText(Path.Combine(deep, "ignore.txt"), "ignore");
+        var writer = new CountingWriter();
+
+        Assert.Equal(new ImportResult(expectedFiles, expectedFiles * 2),
+            await Service(fixture, writer, recursive).ImportAsync());
+        Assert.Equal(expectedFiles, writer.Calls);
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("\t\r\n")]
@@ -135,12 +155,14 @@ public sealed class ImportTests
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["Import:FolderPath"] = "data",
+            ["Import:Recursive"] = "true",
             ["Import:TableName"] = "dbf_data",
             ["Import:ConnectionString"] = "Host=localhost;Database=import_test;Username=test"
         }).Build();
         var services = new ServiceCollection().AddLogging().AddDbfImport(configuration);
         using var provider = services.BuildServiceProvider();
         Assert.Equal(866, provider.GetRequiredService<IOptions<ImportOptions>>().Value.EncodingCodePage);
+        Assert.True(provider.GetRequiredService<IOptions<ImportOptions>>().Value.Recursive);
         Assert.IsType<ImportService>(provider.GetRequiredService<IImportService>());
 
         configuration["Import:TableName"] = "";
@@ -149,8 +171,8 @@ public sealed class ImportTests
     }
 
     private static DbfReader Reader() => new(Options.Create(new ImportOptions()));
-    private static ImportService Service(DbfFixture fixture, IPostgresWriter writer) => new(
-        Options.Create(new ImportOptions { FolderPath = fixture.Folder }), Reader(), writer, NullLogger<ImportService>.Instance);
+    private static ImportService Service(DbfFixture fixture, IPostgresWriter writer, bool recursive = false) => new(
+        Options.Create(new ImportOptions { FolderPath = fixture.Folder, Recursive = recursive }), Reader(), writer, NullLogger<ImportService>.Instance);
 
     private sealed class CountingWriter : IPostgresWriter
     {

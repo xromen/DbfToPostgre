@@ -15,7 +15,8 @@ public sealed class ImportService(
         if (!Directory.Exists(folder))
             throw new DirectoryNotFoundException($"Папка с DBF не найдена: {folder}");
 
-        var files = Directory.EnumerateFiles(folder)
+        var searchOption = options.Value.Recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+        var files = Directory.EnumerateFiles(folder, "*", searchOption)
             .Where(p => Path.GetExtension(p).Equals(".dbf", StringComparison.OrdinalIgnoreCase))
             .OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToArray();
         if (files.Length == 0)
