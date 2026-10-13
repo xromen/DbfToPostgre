@@ -12,15 +12,17 @@ internal sealed class DbfFixture : IDisposable
         new("DATE", 'D', 8, 0), new("ACTIVE", 'L', 1, 0), new("COUNT", 'N', 20, 0)
     ];
 
-    public string Write(string name = "sample.dbf", string amount = "1234.56", string count = "12345678901234567890")
+    public string Write(string name = "sample.dbf", string amount = "1234.56", string count = "12345678901234567890",
+        IReadOnlyList<DbfField>? fields = null, string secondName = "  Ёжик")
     {
+        fields ??= Fields;
         Directory.CreateDirectory(Folder);
         var path = Path.Combine(Folder, name);
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         var encoding = Encoding.GetEncoding(866);
         using var writer = new BinaryWriter(File.Create(path));
-        var headerLength = 32 + Fields.Length * 32 + 1;
-        var recordLength = 1 + Fields.Sum(f => f.Length);
+        var headerLength = 32 + fields.Count * 32 + 1;
+        var recordLength = 1 + fields.Sum(f => f.Length);
         var header = new byte[32];
         header[0] = 0x03;
         header[1] = 126; header[2] = 10; header[3] = 13;
@@ -29,7 +31,7 @@ internal sealed class DbfFixture : IDisposable
         BitConverter.GetBytes((ushort)recordLength).CopyTo(header, 10);
         header[29] = 0x65;
         writer.Write(header);
-        foreach (var field in Fields)
+        foreach (var field in fields)
         {
             var descriptor = new byte[32];
             Encoding.ASCII.GetBytes(field.Name).CopyTo(descriptor, 0);
@@ -40,17 +42,20 @@ internal sealed class DbfFixture : IDisposable
         }
         writer.Write((byte)0x0D);
         WriteRow(false, ["Привет, мир", amount, "20261013", "T", count]);
-        WriteRow(false, ["  Ёжик", "", "", "?", ""]);
+        WriteRow(false, [secondName, "", "", "?", ""]);
         WriteRow(true, ["Удалён", "99.50", "20260101", "F", "10"]);
         writer.Write((byte)0x1A);
         return path;
 
         void WriteRow(bool deleted, string[] values)
         {
+            var byName = Fields.Select((field, index) => (field.Name, Value: values[index]))
+                .ToDictionary(f => f.Name, f => f.Value);
             writer.Write(deleted ? (byte)'*' : (byte)' ');
-            for (var i = 0; i < Fields.Length; i++)
+            foreach (var field in fields)
             {
-                var value = Fields[i].Type == 'N' ? values[i].PadLeft(Fields[i].Length) : values[i].PadRight(Fields[i].Length);
+                var text = byName.GetValueOrDefault(field.Name, "Новое");
+                var value = field.Type == 'N' ? text.PadLeft(field.Length) : text.PadRight(field.Length);
                 writer.Write(encoding.GetBytes(value));
             }
         }

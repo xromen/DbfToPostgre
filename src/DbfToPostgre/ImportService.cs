@@ -24,7 +24,6 @@ public sealed class ImportService(
             return new ImportResult(0, 0);
         }
 
-        IReadOnlyList<DbfField>? expectedFields = null;
         long total = 0;
         foreach (var path in files)
         {
@@ -33,10 +32,6 @@ public sealed class ImportService(
             try
             {
                 using var file = dbfReader.Open(path);
-                expectedFields ??= file.Fields.ToArray();
-                if (!expectedFields.SequenceEqual(file.Fields))
-                    throw new InvalidDataException("Структура DBF отличается от структуры первого файла.");
-
                 var rows = await postgresWriter.ImportAsync(file, cancellationToken);
                 total += rows;
                 logger.LogInformation("Импортировано {Rows} строк из {File}", rows, path);

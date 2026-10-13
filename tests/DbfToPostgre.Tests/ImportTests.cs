@@ -2,6 +2,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using NpgsqlTypes;
 using Xunit;
 
 namespace DbfToPostgre.Tests;
@@ -60,21 +61,35 @@ public sealed class ImportTests
     }
 
     [Fact]
-    public async Task StopsBeforeWritingFileWithDifferentStructure()
+    public async Task ImportsFilesWithAddedRemovedAndReorderedFields()
     {
         using var fixture = new DbfFixture();
         fixture.Write("first.dbf");
-        var path = fixture.Write("second.dbf");
-        using (var stream = File.OpenWrite(path))
-        {
-            stream.Position = 32;
-            stream.WriteByte((byte)'X');
-        }
+        fixture.Write("second.dbf", fields: [DbfFixture.Fields[4], new("EXTRA", 'C', 20, 0), DbfFixture.Fields[0]]);
         var writer = new CountingWriter();
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => Service(fixture, writer).ImportAsync());
-        Assert.IsType<InvalidDataException>(exception.InnerException);
-        Assert.Contains("second.dbf", exception.Message);
-        Assert.Equal(1, writer.Calls);
+        Assert.Equal(new ImportResult(2, 4), await Service(fixture, writer).ImportAsync());
+        Assert.Equal(2, writer.Calls);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("\t\r\n")]
+    [InlineData("\u00a0")]
+    public void ConvertsEmptyAndWhitespaceStringsToNull(string value)
+    {
+        Assert.Null(PostgresWriter.ConvertValue(value, NpgsqlDbType.Varchar));
+        Assert.Null(PostgresWriter.ConvertValue(value, NpgsqlDbType.Text));
+    }
+
+    [Fact]
+    public void PreservesNonemptyStringsZeroAndFalse()
+    {
+        Assert.Equal("  Ёжик", PostgresWriter.ConvertValue("  Ёжик", NpgsqlDbType.Varchar));
+        Assert.Equal(0m, PostgresWriter.ConvertValue(0, NpgsqlDbType.Numeric));
+        Assert.Equal(false, PostgresWriter.ConvertValue(false, NpgsqlDbType.Boolean));
+        Assert.Null(PostgresWriter.ConvertValue(null, NpgsqlDbType.Text));
+        Assert.Null(PostgresWriter.ConvertValue(DBNull.Value, NpgsqlDbType.Text));
     }
 
     [Fact]

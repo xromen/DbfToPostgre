@@ -18,6 +18,89 @@ public sealed class PostgresFactAttribute : FactAttribute
 public sealed class PostgresTests
 {
     [PostgresFact]
+    public async Task AddsColumnsMapsByNameAndWritesExplicitNullsInsteadOfDefaults()
+    {
+        using var fixture = new DbfFixture();
+        var firstPath = fixture.Write("first.dbf", secondName: "");
+        var changedFields = new[] { DbfFixture.Fields[4], new DbfField("EXTRA", 'C', 20, 0), DbfFixture.Fields[0] };
+        var secondPath = fixture.Write("second.dbf", fields: changedFields, secondName: "   ");
+        var settings = Options.Create(new ImportOptions
+        {
+            ConnectionString = Environment.GetEnvironmentVariable("DBF_TEST_CONNECTION_STRING")!,
+            TableName = "dbf_test_" + Guid.NewGuid().ToString("N")
+        });
+        await using var dataSource = NpgsqlDataSource.Create(settings.Value.ConnectionString);
+        var writer = new PostgresWriter(dataSource, settings);
+        var reader = new DbfReader(settings);
+        var table = $"\"public\".\"{settings.Value.TableName}\"";
+        try
+        {
+            using (var first = reader.Open(firstPath))
+                Assert.Equal(2, await writer.ImportAsync(first));
+            await using var defaults = dataSource.CreateCommand(
+                $"ALTER TABLE {table} ADD COLUMN legacy text DEFAULT 'fallback', ALTER COLUMN amount SET DEFAULT 77");
+            await defaults.ExecuteNonQueryAsync();
+            using (var second = reader.Open(secondPath))
+                Assert.Equal(2, await writer.ImportAsync(second));
+
+            await using var data = dataSource.CreateCommand(
+                $"SELECT id, name, amount, date, active, count, extra, legacy FROM {table} ORDER BY id");
+            await using (var result = await data.ExecuteReaderAsync())
+            {
+                Assert.True(await result.ReadAsync());
+                Assert.Equal(1L, result.GetInt64(0));
+                Assert.Equal(1234.56m, result.GetDecimal(2));
+                Assert.True(result.IsDBNull(6));
+                Assert.Equal("fallback", result.GetString(7));
+
+                Assert.True(await result.ReadAsync());
+                Assert.True(result.IsDBNull(1));
+                Assert.True(result.IsDBNull(6));
+
+                Assert.True(await result.ReadAsync());
+                Assert.Equal(3L, result.GetInt64(0));
+                Assert.Equal("Привет, мир", result.GetString(1));
+                Assert.True(result.IsDBNull(2));
+                Assert.True(result.IsDBNull(3));
+                Assert.True(result.IsDBNull(4));
+                Assert.Equal(12345678901234567890m, result.GetDecimal(5));
+                Assert.Equal("Новое", result.GetString(6));
+                Assert.True(result.IsDBNull(7));
+
+                Assert.True(await result.ReadAsync());
+                Assert.True(result.IsDBNull(1));
+                Assert.True(result.IsDBNull(5));
+                Assert.False(await result.ReadAsync());
+            }
+
+            var failedPath = fixture.Write("failed.dbf", fields: [.. changedFields, new("UNCOMMIT", 'C', 20, 0)]);
+            using var source = reader.Open(failedPath);
+            using var failed = new FailedFile(source);
+            await Assert.ThrowsAsync<InvalidDataException>(() => writer.ImportAsync(failed));
+            await using var schema = dataSource.CreateCommand("""
+                SELECT count(*) FROM information_schema.columns
+                WHERE table_schema = 'public' AND table_name = @table AND column_name = 'uncommit'
+                """);
+            schema.Parameters.AddWithValue("table", settings.Value.TableName);
+            Assert.Equal(0L, await schema.ExecuteScalarAsync());
+
+            await using var required = dataSource.CreateCommand(
+                $"ALTER TABLE {table} ADD COLUMN required text NOT NULL DEFAULT 'value'");
+            await required.ExecuteNonQueryAsync();
+            using var incompatible = reader.Open(secondPath);
+            var exception = await Assert.ThrowsAsync<InvalidDataException>(() => writer.ImportAsync(incompatible));
+            Assert.Contains("NOT NULL", exception.Message);
+            await using var count = dataSource.CreateCommand($"SELECT count(*) FROM {table}");
+            Assert.Equal(4L, await count.ExecuteScalarAsync());
+        }
+        finally
+        {
+            await using var cleanup = dataSource.CreateCommand($"DROP TABLE IF EXISTS {table}");
+            await cleanup.ExecuteNonQueryAsync();
+        }
+    }
+
+    [PostgresFact]
     public async Task CreatesTableCombinesFilesGeneratesIdsAndRollsBackFailedFile()
     {
         using var fixture = new DbfFixture();
